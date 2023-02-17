@@ -1,15 +1,17 @@
 from dolfinx import fem
 import scipy as sp
 
-# import petsc4py
-# import petsc4py.lib
 from petsc4py import PETSc
 
 def initialize_problem(problem: fem.petsc.LinearProblem):
     """ The matrix and vector are not initialized after defining a fem.petsc.LinearProblem, 
         here following the implementation in the source code for fem.petsc.LinearProblem.solve() """
     
-    
+    # Alternative, maybe simpler method from https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_elasticity.html
+    # a = fem.form( ufl.dot( ufl.grad(u), ufl.grad(v) ) )
+    # A = fem.petsc.assemble_matrix(a, bcs=[bc])
+    # A.assemble()
+
     # Assemble left-hand-side
     problem._A.zeroEntries()
     fem.petsc._assemble_matrix_mat(problem._A, problem._a, bcs=problem.bcs)

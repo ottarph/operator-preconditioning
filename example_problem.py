@@ -2,7 +2,6 @@ import numpy as np
 import scipy as sp
 import matplotlib.pyplot as plt
 
-
 from mpi4py import MPI
 from dolfinx import mesh
 
@@ -11,29 +10,47 @@ from petsc4py.PETSc import ScalarType
 import ufl
 
 
-def create_problem(N):
+def create_mesh(N):
 
     domain = mesh.create_unit_square(MPI.COMM_SELF, N, N)
-
-    V = fem.FunctionSpace(domain, ("CG", 1))
 
     tdim = domain.topology.dim
     fdim = tdim - 1
     domain.topology.create_connectivity(fdim, tdim)
 
-    boundary_facets = mesh.exterior_facet_indices(domain.topology)
+    return domain
 
-    boundary_dofs = fem.locate_dofs_topological(V, fdim, boundary_facets)
+def create_riesz_problem(domain, V):
+    """ Create the problem f \mapsto u s.t. -\Delta u = f in \Omega, u = 0 on \partial\Omega.
+        Only the left-hand-side matrix portion is of interest here, for creating the preconditioner. """
+    
+    # Create homogeneous Dirichlet boundary conditions.
+    boundary_facets = mesh.exterior_facet_indices(domain.topology)
+    boundary_dofs = fem.locate_dofs_topological(V, domain.topology.dim-1, boundary_facets)
+    bc = fem.dirichletbc(ScalarType(0), boundary_dofs, V)
+
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+
+    f = fem.Constant(domain, ScalarType(1))
+
+    a = ufl.dot( ufl.grad(u), ufl.grad(v) ) * ufl.dx
+    L = f * v * ufl.dx
+
+    problem = fem.petsc.LinearProblem(a, L, bcs=[bc])
+
+    return problem
+
+def create_inhomogeneous_problem(domain, V, kappa, f):
+
+    # Create homogeneous Dirichlet boundary conditions.
+    boundary_facets = mesh.exterior_facet_indices(domain.topology)
+    boundary_dofs = fem.locate_dofs_topological(V, domain.topology.dim-1, boundary_facets)
     bc = fem.dirichletbc(ScalarType(0), boundary_dofs, V)
 
 
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
-    x = ufl.SpatialCoordinate(domain)
-
-    f = fem.Constant(domain, ScalarType(1))
-
-    kappa = 1.0 + 0.5*ufl.sin(x[0]**2 + x[1]**2)
 
     u = ufl.TrialFunction(V)
     v = ufl.TestFunction(V)
@@ -42,20 +59,32 @@ def create_problem(N):
     a = kappa * ufl.dot(ufl.grad(u), ufl.grad(v)) * ufl.dx
     L = f * v * ufl.dx
 
-    problem = fem.petsc.LinearProblem(a, L, bcs=[bc], petsc_options={"ksp_type": "preonly", "pc_type": "lu"})
-    
+    problem = fem.petsc.LinearProblem(a, L, bcs=[bc])
+    return problem
 
-    return problem, domain, V
+N = 21
+domain = create_mesh(N)
+V = fem.FunctionSpace(domain, ("CG", 1))
+
+x = ufl.SpatialCoordinate(domain)
+
+
+f = fem.Constant(domain, ScalarType(1))
+kappa = 6.0 + 5.0*ufl.sin(ufl.pi*( (x[0]-0.5)**2 + (x[1]-0.5)**2 ))
 
 
 from bindings.petsc_to_scipy import unpack_problem
 
-N = 21
-problem, domain, V = create_problem(N)
-A_csr, b = unpack_problem(problem)
 
-M = np.zeros((b.shape[0], b.shape[0]+1))
-M[:,:-1] = A_csr.todense()
+inh_problem = create_inhomogeneous_problem(domain, V, kappa, f)
+A_csr, b = unpack_problem(inh_problem)
+
+riesz_problem = create_riesz_problem(domain, V)
+B_csr, _ = unpack_problem(riesz_problem)
+
+M = np.zeros((b.shape[0], 2*b.shape[0]+1))
+M[:,:b.shape[0]] = A_csr.todense()
+M[:,b.shape[0]:-1] = B_csr.todense()
 M[:,-1] = b
 ims = plt.imshow(M)
 plt.colorbar(ims)
@@ -64,7 +93,31 @@ plt.figure()
 plt.spy(M)
 
 
-u_np = sp.sparse.linalg.spsolve(A_csr, b)
+import pyamg
+
+print(A_csr.shape)
+print(B_csr.shape)
+ml = pyamg.ruge_stuben_solver(B_csr)
+B = ml.aspreconditioner(cycle='V')
+
+def callback(xk):
+    global k
+    k += 1
+    print(k)
+    return
+
+print("With preconditioning: ")
+k = 0
+u_np, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=50, M=B, callback=callback)
+print("Error =", np.linalg.norm(A_csr @ u_np - b))
+print()
+
+print("Without preconditioning: ")
+k = 0
+u_np, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=50, M=None, callback=callback)
+print("Error =", np.linalg.norm(A_csr @ u_np - b))
+print()
+
 xx = domain.geometry.x
 
 ax = plt.figure().add_subplot(projection='3d')
