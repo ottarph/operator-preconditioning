@@ -62,7 +62,7 @@ def create_inhomogeneous_problem(domain, V, kappa, f):
     problem = fem.petsc.LinearProblem(a, L, bcs=[bc])
     return problem
 
-N = 21
+N = 100
 domain = create_mesh(N)
 V = fem.FunctionSpace(domain, ("CG", 1))
 
@@ -82,15 +82,17 @@ A_csr, b = unpack_problem(inh_problem)
 riesz_problem = create_riesz_problem(domain, V)
 B_csr, _ = unpack_problem(riesz_problem)
 
-M = np.zeros((b.shape[0], 2*b.shape[0]+1))
-M[:,:b.shape[0]] = A_csr.todense()
-M[:,b.shape[0]:-1] = B_csr.todense()
-M[:,-1] = b
-ims = plt.imshow(M)
-plt.colorbar(ims)
+if N <= 40:
 
-plt.figure()
-plt.spy(M)
+    M = np.zeros((b.shape[0], 2*b.shape[0]+1))
+    M[:,:b.shape[0]] = A_csr.todense()
+    M[:,b.shape[0]:-1] = B_csr.todense()
+    M[:,-1] = b
+    ims = plt.imshow(M / np.amax(M))
+    plt.colorbar(ims)
+
+    plt.figure()
+    plt.spy(M)
 
 
 import pyamg
@@ -114,14 +116,18 @@ print()
 
 print("Without preconditioning: ")
 k = 0
-u_np, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=50, M=None, callback=callback)
+u_np_wp, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=50, M=None, callback=callback)
 print("Error =", np.linalg.norm(A_csr @ u_np - b))
 print()
 
 xx = domain.geometry.x
 
+step = 1
+if N > 40:
+    step = N**2 // 1000
+
 ax = plt.figure().add_subplot(projection='3d')
-ax.plot_trisurf(xx[:,0], xx[:,1], u_np, cmap=plt.cm.viridis)
+ax.plot_trisurf(xx[::step,0], xx[::step,1], u_np[::step], cmap=plt.cm.viridis)
 
 
 
