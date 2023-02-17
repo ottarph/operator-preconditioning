@@ -97,27 +97,28 @@ if N <= 40:
 
 import pyamg
 
-print(A_csr.shape)
-print(B_csr.shape)
 ml = pyamg.ruge_stuben_solver(B_csr)
 B = ml.aspreconditioner(cycle='V')
 
-def callback(xk):
-    global k
-    k += 1
-    print(k)
-    return
+
+class callback:
+    def __init__(self, name="Solver"):
+        self.k = 0
+        self.name = name
+
+    def __call__(self, xk):
+        self.k += 1
+        print(f"{self.name}: k={self.k}, ||r_k||={np.linalg.norm(A_csr@xk - b):.2e}")
+        return
 
 print("With preconditioning: ")
-k = 0
-u_np, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=50, M=B, callback=callback)
+u_np, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=30, M=B, callback=callback("CG w/ AMG precond."))
 print("Error =", np.linalg.norm(A_csr @ u_np - b))
 print()
 
 print("Without preconditioning: ")
-k = 0
-u_np_wp, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=50, M=None, callback=callback)
-print("Error =", np.linalg.norm(A_csr @ u_np - b))
+u_np_wp, info = sp.sparse.linalg.cg(A_csr, b, tol=1e-8, maxiter=30, M=None, callback=callback("CG w/ no precond."))
+print("Error =", np.linalg.norm(A_csr @ u_np_wp - b))
 print()
 
 xx = domain.geometry.x
